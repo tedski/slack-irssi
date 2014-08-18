@@ -241,9 +241,6 @@ Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
 Irssi::signal_add_first('away mode changed', 'sig_away');
 
-# commands
-Irssi::command_bind('mark', 'cmd_mark');
-
 # settings
 Irssi::settings_add_str('misc', $IRSSI{'name'} . '_token', '');
 Irssi::settings_add_int('misc', $IRSSI{'name'} . '_loglines', 20);

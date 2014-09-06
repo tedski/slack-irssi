@@ -1,4 +1,4 @@
-#i!/usr/bin/perl
+#!/usr/bin/perl
 #
 # Copyright 2014 Ted 'tedski' Strzalkowski <contact@tedski.net>
 #

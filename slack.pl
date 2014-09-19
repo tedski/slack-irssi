@@ -56,7 +56,7 @@ our %IRSSI = (
 );
 
 my $baseurl = "https://slack.com/api/";
-my $svrre = qr/.*\.slack\.com/;
+my $svrre = qr/^$IRSSI{'name'}\.irc\.slack\.com/;
 my $lastupdate = 0;
 
 sub init {
@@ -207,7 +207,7 @@ sub sig_away {
     $url->query_form('presence' => $presence);
 
     api_call('get', $url);
-    Irssi::print("You have been marked as being $presence on Slack.", MSGLEVEL_CRAP);
+    Irssi::print("You have been marked as being $presence on Slack ($IRSSI{'name'}).", MSGLEVEL_CRAP);
     # Slack IRC Gateway does not properly handle away, so we'll intercept
     Irssi::signal_stop();
   }

@@ -226,6 +226,18 @@ sub sig_window_activity {
   update_slack_mark($window);
 }
 
+sub sig_message_public {
+  my ($server, $msg, $nick, $address, $target) = @_;
+
+  foreach my $window (Irssi::windows()) {
+    if ($window->{active}->{type} eq 'CHANNEL' &&
+        $window->{active}->{name} eq $target &&
+        $window->{bottom}) {
+      update_slack_mark($window);
+    }
+  }
+}
+
 sub cmd_mark {
   my ($mark_windows) = @_;
   return unless ($mark_windows =~ /(^|\b)ACTIVE($|\b)/);
@@ -271,6 +283,7 @@ Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
 Irssi::signal_add('window changed', 'sig_window_changed');
 Irssi::signal_add('window activity', 'sig_window_activity');
+Irssi::signal_add('message public', 'sig_message_public');
 Irssi::signal_add_first('away mode changed', 'sig_away');
 
 Irssi::command_bind('mark', 'cmd_mark');

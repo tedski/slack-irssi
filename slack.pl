@@ -221,11 +221,6 @@ sub sig_window_changed {
   update_slack_mark($new_window);
 }
 
-sub sig_window_activity {
-  my ($window) = @_;
-  update_slack_mark($window);
-}
-
 sub sig_message_public {
   my ($server, $msg, $nick, $address, $target) = @_;
 
@@ -296,7 +291,6 @@ Irssi::signal_add('server connected', 'sig_server_conn');
 Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
 Irssi::signal_add('window changed', 'sig_window_changed');
-Irssi::signal_add('window activity', 'sig_window_activity');
 Irssi::signal_add('message public', 'sig_message_public');
 Irssi::signal_add_first('away mode changed', 'sig_away');
 

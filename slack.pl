@@ -239,9 +239,23 @@ sub sig_message_public {
 
 sub cmd_mark {
   my ($mark_windows) = @_;
-  return unless ($mark_windows =~ /(^|\b)ACTIVE($|\b)/);
 
-  update_slack_mark(Irssi::active_win());
+  my(@windows) = Irssi::windows();
+  foreach my $name (split(/\s+/, $mark_windows)) {
+    if ($name eq 'ACTIVE') {
+      push(@mark_windows, $active_win);
+      next;
+    }
+
+    foreach my $window (@windows) {
+      if ($window->{name} eq $name) {
+        push(@mark_windows, $window);
+      }
+    }
+  }
+  foreach my $window (@mark_windows) {
+    update_slack_mark($window);
+  }
 }
 
 sub sig_away {

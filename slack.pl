@@ -229,7 +229,7 @@ sub sig_window_activity {
 sub sig_message_public {
   my ($server, $msg, $nick, $address, $target) = @_;
 
-  $window = Irssi::active_win();
+  my $window = Irssi::active_win();
   if ($window->{active}->{type} eq 'CHANNEL' &&
       $window->{active}->{name} eq $target &&
       $window->{bottom}) {
@@ -241,9 +241,10 @@ sub cmd_mark {
   my ($mark_windows) = @_;
 
   my(@windows) = Irssi::windows();
+  my @mark_windows;
   foreach my $name (split(/\s+/, $mark_windows)) {
     if ($name eq 'ACTIVE') {
-      push(@mark_windows, $active_win);
+      push(@mark_windows, Irssi::active_win());
       next;
     }
 

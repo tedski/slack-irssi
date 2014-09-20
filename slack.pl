@@ -229,12 +229,11 @@ sub sig_window_activity {
 sub sig_message_public {
   my ($server, $msg, $nick, $address, $target) = @_;
 
-  foreach my $window (Irssi::windows()) {
-    if ($window->{active}->{type} eq 'CHANNEL' &&
-        $window->{active}->{name} eq $target &&
-        $window->{bottom}) {
-      update_slack_mark($window);
-    }
+  $window = Irssi::active_win();
+  if ($window->{active}->{type} eq 'CHANNEL' &&
+      $window->{active}->{name} eq $target &&
+      $window->{bottom}) {
+    update_slack_mark($window);
   }
 }
 

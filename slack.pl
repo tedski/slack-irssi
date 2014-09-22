@@ -137,6 +137,13 @@ sub get_users {
 
 my %CHANNELS;
 my $LAST_CHANNELS_UPDATE;
+sub chan_joined {
+  my ($channel) = @_;
+
+  if ($channel->{server}->{tag} eq $servertag) {
+    $LAST_CHANNELS_UPDATE = 0;
+  }
+}
 sub get_chanid {
   my ($channame) = @_;
 
@@ -243,6 +250,7 @@ Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$
 Irssi::signal_add('server connected', 'sig_server_conn');
 Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
+Irssi::signal_add('channel joined', 'chan_joined');
 Irssi::signal_add_first('away mode changed', 'sig_away');
 
 # settings

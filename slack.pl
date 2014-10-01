@@ -191,7 +191,7 @@ sub get_chanlog {
             next;
           }
           my $ts = strftime('%H:%M', localtime $m->{ts});
-          $channel->printformat(MSGLEVEL_PUBLIC, "slackmsg", $users{$m->{user}}, $m->{text}, "+", $ts);
+          $channel->printformat(MSGLEVEL_PUBLIC, "slackmsg", $USERS{$m->{user}}, $m->{text}, "+", $ts);
         }
       }
     }

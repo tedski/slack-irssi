@@ -42,7 +42,7 @@ use URI;
 use LWP::UserAgent;
 use Mozilla::CA;
 use POSIX qw(strftime);
-use vars qw($VERSION %IRSSI %users $token $servertag $forked);
+use vars qw($VERSION %IRSSI $token $servertag $forked);
 
 our $VERSION = "0.1.1";
 our %IRSSI = (
@@ -115,10 +115,12 @@ sub sig_server_disc {
   }
 }
 
+my %USERS;
+my $LAST_USERS_UPDATE;
 sub get_users {
   return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
 
-  if (($lastupdate + 4 * 60 * 60) < time()) {
+  if (($LAST_USERS_UPDATE + 4 * 60 * 60) < time()) {
     my $url = URI->new($baseurl . 'users.list');
 
     my $resp = api_call('get', $url);
@@ -126,31 +128,40 @@ sub get_users {
     if ($resp->{ok}) {
       my $slack_users = $resp->{members};
       foreach my $u (@{$slack_users}) {
-        $users{$u->{id}} = $u->{name};
+        $USERS{$u->{id}} = $u->{name};
       }
-      $lastupdate = time();
+      $LAST_USERS_UPDATE = time();
     }
   }
 }
 
+my %CHANNELS;
+my $LAST_CHANNELS_UPDATE;
+sub chan_joined {
+  my ($channel) = @_;
+
+  if ($channel->{server}->{tag} eq $servertag) {
+    $LAST_CHANNELS_UPDATE = 0;
+  }
+}
 sub get_chanid {
   my ($channame) = @_;
 
-  my $url = URI->new($baseurl . 'channels.list');
-  $url->query_form('exclude_archived' => 1);
+  if (($LAST_CHANNELS_UPDATE + 4 * 60 * 60) < time()) {
+    my $url = URI->new($baseurl . 'channels.list');
+    $url->query_form('exclude_archived' => 1);
 
-  my $resp = api_call('get', $url);
+    my $resp = api_call('get', $url);
 
-  if ($resp->{ok}) {
-    my $chanlist = $resp->{channels};
-    foreach my $c (@{$chanlist}) {
-      if ($c->{name} eq $channame) {
-        return $c->{id};
-      } else {
-        next;
+    if ($resp->{ok}) {
+      foreach my $c (@{$resp->{channels}}) {
+        $CHANNELS{$c->{name}} = $c->{id};
       }
+      $LAST_CHANNELS_UPDATE = time();
     }
   }
+
+  return $CHANNELS{$channame};
 }    
 
 sub get_chanlog {

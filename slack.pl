@@ -286,8 +286,6 @@ sub sig_away {
 
     api_call('get', $url);
     Irssi::print("You have been marked as being $presence on Slack ($IRSSI{'name'}).", MSGLEVEL_CRAP);
-    # Slack IRC Gateway does not properly handle away, so we'll intercept
-    Irssi::signal_stop();
   }
 }
 

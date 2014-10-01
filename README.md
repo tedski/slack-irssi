@@ -13,7 +13,3 @@ There are 3 settings available:
 
 /set slack_loglines <integer>
  * the number of lines to grab from channel history
-
-# Known issues
-
-The API calls block I/O until they receive a response.  A forked version of this script is forthcoming.

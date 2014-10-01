@@ -187,6 +187,73 @@ sub get_chanlog {
   }
 }
 
+my %LAST_MARK_UPDATED;
+sub update_slack_mark {
+  my ($window) = @_;
+
+  return unless ($window->{active}->{type} eq 'CHANNEL' &&
+                 $window->{active_server}->{tag} eq $servertag);
+  return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
+
+  # Leave $line set to the final visible line, not the one after.
+  my $view = $window->view();
+  my $line = $view->{startline};
+  my $count = $view->get_line_cache($line)->{count};
+  while ($count < $view->{height} && $line->next) {
+    $line = $line->next;
+    $count += $view->get_line_cache($line)->{count};
+  }
+
+  # Only update the Slack mark if the most recent visible line is newer.
+  my($channel) = $window->{active}->{name} =~ /^#(.*)/;
+  if ($LAST_MARK_UPDATED{$channel} < $line->{info}->{time}) {
+    my $url = URI->new($baseurl . 'channels.mark');
+    $url->query_form('channel' => get_chanid($channel),
+      'ts' => $line->{info}->{time});
+
+    api_call('get', $url);
+    $LAST_MARK_UPDATED{$channel} = $line->{info}->{time};
+  }
+}
+
+sub sig_window_changed {
+  my ($new_window) = @_;
+  update_slack_mark($new_window);
+}
+
+sub sig_message_public {
+  my ($server, $msg, $nick, $address, $target) = @_;
+
+  my $window = Irssi::active_win();
+  if ($window->{active}->{type} eq 'CHANNEL' &&
+      $window->{active}->{name} eq $target &&
+      $window->{bottom}) {
+    update_slack_mark($window);
+  }
+}
+
+sub cmd_mark {
+  my ($mark_windows) = @_;
+
+  my(@windows) = Irssi::windows();
+  my @mark_windows;
+  foreach my $name (split(/\s+/, $mark_windows)) {
+    if ($name eq 'ACTIVE') {
+      push(@mark_windows, Irssi::active_win());
+      next;
+    }
+
+    foreach my $window (@windows) {
+      if ($window->{name} eq $name) {
+        push(@mark_windows, $window);
+      }
+    }
+  }
+  foreach my $window (@mark_windows) {
+    update_slack_mark($window);
+  }
+}
+
 sub sig_away {
   return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
   return unless Irssi::settings_get_bool($IRSSI{'name'} . '_away');
@@ -213,22 +280,6 @@ sub sig_away {
   }
 }
 
-sub cmd_mark {
-  return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
-  my $window = Irssi::active_win();
-
-  if ($window->{active}->{type} eq 'CHANNEL' && $window->{active_server}->{tag} eq $servertag) {
-    $window->{active}->{name} =~ s/^#//;
-    my $chanid = get_chanid($window->{active}->{name});
-
-    my $url = URI->new($baseurl . 'channels.mark');
-    $url->query_form('channel' => $chanid,
-      'ts' => time());
-
-    api_call('get', $url);
-  }
-}
-
 # setup
 init();
 
@@ -239,7 +290,11 @@ Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$
 Irssi::signal_add('server connected', 'sig_server_conn');
 Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
+Irssi::signal_add('window changed', 'sig_window_changed');
+Irssi::signal_add('message public', 'sig_message_public');
 Irssi::signal_add_first('away mode changed', 'sig_away');
+
+Irssi::command_bind('mark', 'cmd_mark');
 
 # settings
 Irssi::settings_add_str('misc', $IRSSI{'name'} . '_token', '');

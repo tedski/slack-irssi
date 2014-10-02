@@ -8,8 +8,5 @@ There are 3 settings available:
 /set slack_token <string>
  * The api token from [https://api.slack.com/]
 
-/set slack_away ON/OFF/TOGGLE
- * manage your slack presence with /away
-
 /set slack_loglines <integer>
  * the number of lines to grab from channel history

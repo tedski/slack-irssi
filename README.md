@@ -9,7 +9,7 @@ On connect to the server, expect the number of lines set in `slack_loglines` to 
 
 ## Configuration
 
-There are 3 settings available:
+There are 2 settings available:
 
 `/set slack_token <string>`
  * The api token from [https://api.slack.com/]

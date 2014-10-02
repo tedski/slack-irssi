@@ -22,7 +22,7 @@
 #
 # usage:
 #
-# there are 3 settings available:
+# there are 2 settings available:
 #
 # /set slack_token <string>
 #  - The api token from https://api.slack.com/

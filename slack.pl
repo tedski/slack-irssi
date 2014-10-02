@@ -27,9 +27,6 @@
 # /set slack_token <string>
 #  - The api token from https://api.slack.com/
 #
-# /set slack_away ON/OFF/TOGGLE
-#  - manage your slack presence with /away
-#
 # /set slack_loglines <integer>
 #  - the number of lines to grab from channel history
 # 
@@ -265,30 +262,6 @@ sub cmd_mark {
   }
 }
 
-sub sig_away {
-  return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
-  return unless Irssi::settings_get_bool($IRSSI{'name'} . '_away');
-
-  my ($server) = @_;
-
-  if ($server->{tag} eq $servertag) {
-
-    my $presence;
-
-    if ($server->{usermode_away}) {
-      $presence = 'away';
-    } else {
-      $presence = 'active';
-    }
-
-    my $url = URI->new($baseurl . 'presence.set');
-    $url->query_form('presence' => $presence);
-
-    api_call('get', $url);
-    Irssi::print("You have been marked as being $presence on Slack ($IRSSI{'name'}).", MSGLEVEL_CRAP);
-  }
-}
-
 # setup
 init();
 
@@ -301,11 +274,9 @@ Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
 Irssi::signal_add('window changed', 'sig_window_changed');
 Irssi::signal_add('message public', 'sig_message_public');
-Irssi::signal_add_first('away mode changed', 'sig_away');
 
 Irssi::command_bind('mark', 'cmd_mark');
 
 # settings
 Irssi::settings_add_str('misc', $IRSSI{'name'} . '_token', '');
 Irssi::settings_add_int('misc', $IRSSI{'name'} . '_loglines', 20);
-Irssi::settings_add_bool('misc', $IRSSI{'name'} . '_away', 1);

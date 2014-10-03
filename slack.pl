@@ -53,7 +53,7 @@ our %IRSSI = (
 );
 
 my $baseurl = "https://slack.com/api/";
-my $svrre = qr/^$IRSSI{'name'}\.irc\.slack\.com/;
+my $svrre = qr/^\w\.irc\.slack\.com/;
 my $lastupdate = 0;
 
 sub init {

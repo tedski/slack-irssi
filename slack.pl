@@ -272,6 +272,7 @@ Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$
 Irssi::signal_add('server connected', 'sig_server_conn');
 Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
+Irssi::signal_add('channel joined', 'chan_joined');
 Irssi::signal_add('window changed', 'sig_window_changed');
 Irssi::signal_add('message public', 'sig_message_public');
 

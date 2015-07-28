@@ -142,16 +142,21 @@ sub chan_joined {
   }
 }
 sub get_chanid {
-  my ($channame) = @_;
+  my ($channame, $is_private, $force) = @_;
 
-  if (($LAST_CHANNELS_UPDATE + 4 * 60 * 60) < time()) {
-    my $url = URI->new($baseurl . 'channels.list');
+  my $ressource = "channels";
+  if ($is_private) {
+    $ressource = "groups";
+  }
+
+  if ($force || (($LAST_CHANNELS_UPDATE + 4 * 60 * 60) < time())) {
+    my $url = URI->new($baseurl . $ressource . '.list');
     $url->query_form('exclude_archived' => 1);
 
     my $resp = api_call('get', $url);
 
     if ($resp->{ok}) {
-      foreach my $c (@{$resp->{channels}}) {
+      foreach my $c (@{$resp->{$ressource}}) {
         $CHANNELS{$c->{name}} = $c->{id};
       }
       $LAST_CHANNELS_UPDATE = time();
@@ -171,10 +176,20 @@ sub get_chanlog {
     my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
     $channel->{name} =~ s/^#//;
     my $url = URI->new($baseurl . 'channels.history');
-    $url->query_form('channel' => get_chanid($channel->{name}),
+    $url->query_form('channel' => get_chanid($channel->{name}, 0, 0),
       'count' => $count);
 
     my $resp = api_call('get', $url);
+
+    if (!$resp->{ok}) {
+      # First try failed, so maybe this chan is actually a private group
+      Irssi::print($channel->{name}. " appears to be a private group");
+      $url = URI->new($baseurl . 'groups.history');
+      my $groupid = get_chanid($channel->{name}, 1, 1);
+      $url->query_form('channel' => $groupid,
+                       'count' => $count);
+      $resp = api_call('get', $url);
+    }
 
     if ($resp->{ok}) {
       my $msgs = $resp->{messages};

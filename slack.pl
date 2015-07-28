@@ -34,6 +34,7 @@
 use strict;
 
 use Irssi;
+use Irssi::TextUI;
 use JSON;
 use URI;
 use LWP::UserAgent;

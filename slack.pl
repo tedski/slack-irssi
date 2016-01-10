@@ -57,6 +57,8 @@ my $baseurl = "https://slack.com/api/";
 my $svrre = qr/^\w+\.irc\.slack\.com/;
 my $lastupdate = 0;
 
+my $SLACK_AUTO_AWAY_TIMEOUT = 30 * 60;
+
 sub init {
   my @servers = Irssi::servers();
 
@@ -255,6 +257,21 @@ sub sig_message_public {
     update_slack_mark($window);
   }
 }
+
+sub timeout_set_active() {
+  foreach my $server (Irssi::servers()) {
+    next if ($server->{tag} ne $servertag);
+    next if ($server->{usermode_away});
+
+    my $url = URI->new($baseurl . 'users.setActive');
+    api_call('get', $url);
+  }
+}
+# Set ourselves active slightly before Slack's auto-away timeout.
+Irssi::timeout_add(
+  0.99 * $SLACK_AUTO_AWAY_TIMEOUT * 1000,
+  'timeout_set_active', undef
+);
 
 sub cmd_mark {
   my ($mark_windows) = @_;

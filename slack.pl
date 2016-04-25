@@ -38,7 +38,7 @@ use Irssi::TextUI;
 use JSON;
 use URI;
 use LWP::UserAgent;
-use Mozilla::CA;
+#use Mozilla::CA;
 use POSIX qw(strftime);
 use vars qw($VERSION %IRSSI $token $servertag $forked);
 
@@ -84,10 +84,10 @@ sub api_call {
   $payload = from_json($resp->decoded_content);
   if ($resp->is_success) {
     if (! $payload->{ok}) {
-      Irssi::print("The Slack API returned the following error: $payload->{error}", MSGLEVEL_CLIENTERROR);
-    } else {
+      Irssi::print("The Slack API returned the following error: $payload->{error}", MSGLEVEL_CLIENTERROR) unless $payload->{error} eq 'channel_not_found';
+    } #else {
     return $payload;
-    }
+    #}
   } else {
     Irssi::print("Error calling the slack api: $resp->{code} $resp->{message}", MSGLEVEL_CLIENTERROR);
   }
@@ -167,6 +167,29 @@ sub get_chanid {
   return $CHANNELS{$channame};
 }    
 
+sub get_query_log {
+    &Irssi::signal_continue;
+    my ($query) = @_;
+    if ($query->{server}->{tag} eq $servertag) {
+	get_users();
+	my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
+	my $url = URI->new($baseurl . 'im.list');
+	my $resp = api_call('get', $url);
+	return unless $resp->{ok};
+	for my $im (@{$resp->{ims}}) {
+	    if (lc $USERS{$im->{user}} eq lc $query->{name}) {
+		my $url = URI->new($baseurl . 'im.history');
+		$url->query_form('channel' => $im->{id},
+				 'count' => $count);
+		my $resp = api_call('get', $url);
+		if ($resp->{ok}) {
+		    print_history($resp, $query);
+		}
+	    }
+	}
+    }
+}
+
 sub get_chanlog {
   my ($channel) = @_;
 
@@ -184,7 +207,7 @@ sub get_chanlog {
 
     if (!$resp->{ok}) {
       # First try failed, so maybe this chan is actually a private group
-      Irssi::print($channel->{name}. " appears to be a private group");
+      #Irssi::print($channel->{name}. " appears to be a private group");
       $url = URI->new($baseurl . 'groups.history');
       my $groupid = get_chanid($channel->{name}, 1, 1);
       $url->query_form('channel' => $groupid,
@@ -193,22 +216,27 @@ sub get_chanlog {
     }
 
     if ($resp->{ok}) {
-      my $msgs = $resp->{messages};
-      foreach my $m (reverse(@{$msgs})) {
-        if ($m->{type} eq 'message') {
-          if ($m->{subtype} eq 'message_changed') {
-            $m->{text} = $m->{message}->{text};
-            $m->{user} = $m->{message}->{user};
-          }
-          elsif ($m->{subtype}) {
-            next;
-          }
-          my $ts = strftime('%H:%M', localtime $m->{ts});
-          $channel->printformat(MSGLEVEL_PUBLIC, "slackmsg", $USERS{$m->{user}}, $m->{text}, "+", $ts);
-        }
-      }
+	print_history($resp, $channel);
     }
   }
+}
+
+sub print_history {
+    my ($resp, $channel) = @_;
+    my $msgs = $resp->{messages};
+    foreach my $m (reverse(@{$msgs})) {
+        if ($m->{type} eq 'message') {
+	    if ($m->{subtype} eq 'message_changed') {
+		$m->{text} = $m->{message}->{text};
+		$m->{user} = $m->{message}->{user};
+	    }
+	    elsif ($m->{subtype}) {
+		next;
+	    }
+	    my $ts = strftime('%H:%M', localtime $m->{ts});
+	    $channel->printformat(MSGLEVEL_PUBLIC, "slackmsg", $USERS{$m->{user}}, $m->{text}, "+", $ts);
+        }
+    }
 }
 
 my %LAST_MARK_UPDATED;
@@ -282,18 +310,19 @@ sub cmd_mark {
 init();
 
 # themes
-Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$1']);
+Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$1%[-t]']);
 
 # signals
 Irssi::signal_add('server connected', 'sig_server_conn');
 Irssi::signal_add('server disconnected', 'sig_server_disc');
 Irssi::signal_add('setup changed', 'get_users');
 Irssi::signal_add('channel joined', 'chan_joined');
-Irssi::signal_add('window changed', 'sig_window_changed');
-Irssi::signal_add('message public', 'sig_message_public');
+Irssi::signal_add('query created', 'get_query_log');
+#Irssi::signal_add('window changed', 'sig_window_changed');
+#Irssi::signal_add('message public', 'sig_message_public');
 
-Irssi::command_bind('mark', 'cmd_mark');
+Irssi::command_bind('slackmark', 'cmd_mark');
 
 # settings
 Irssi::settings_add_str('misc', $IRSSI{'name'} . '_token', '');
-Irssi::settings_add_int('misc', $IRSSI{'name'} . '_loglines', 20);
+Irssi::settings_add_int('misc', $IRSSI{'name'} . '_loglines', 200);

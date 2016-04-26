@@ -1,4 +1,18 @@
-#!/usr/bin/perl
+#!perl
+
+use strict;
+use warnings;
+
+our $VERSION = "0.1.3";
+our %IRSSI = (
+  authors     => "Ted \'tedski\' Strzalkowski",
+  contact     => "contact\@tedski.net",
+  name	      => "slack",
+  description => "Add functionality when connected to the Slack IRC Gateway.",
+  license     => "GPL",
+  url	      => "https://github.com/tedski/slack-irssi/",
+ );
+
 #
 # Copyright 2014 Ted 'tedski' Strzalkowski <contact@tedski.net>
 #
@@ -31,13 +45,22 @@
 #  - the number of lines to grab from channel history
 # 
 
-use strict;
-
 use Irssi;
 use Irssi::TextUI;
-use JSON;
-use URI;
-use LWP::UserAgent;
+
+use File::Basename 'dirname';
+use File::Spec;
+use Cwd 'abs_path';
+use constant ScriptFile => __FILE__;
+
+use lib File::Spec->catdir(dirname(abs_path(+ScriptFile)), 'lib');
+
+use constant MAIN => __PACKAGE__ eq 'main';
+use if !MAIN, 'Nei::Mojo::Reactor::Irssi4';
+use Mojo::UserAgent;
+use Mojo::IOLoop;
+use Mojo::URL;
+
 use HTML::Entities;
 BEGIN {
   local $@;
@@ -48,22 +71,20 @@ BEGIN {
 }
 use POSIX qw(strftime);
 
-our $VERSION = "0.1.1";
-our %IRSSI = (
-  authors     => "Ted \'tedski\' Strzalkowski",
-  contact     => "contact\@tedski.net",
-  name	      => "slack",
-  description => "Add functionality when connected to the Slack IRC Gateway.",
-  license     => "GPL",
-  url	      => "https://github.com/tedski/slack-irssi/",
- );
-
 my $baseurl = "https://slack.com/api/";
 my $svrre = qr/\.irc\.slack\.com/;
 my $lastupdate = 0;
 my %servertag;
+my $DELAY_ID = 0;
+my %DELAYS;
+my $ua;
 
 sub init {
+  $ua = Mojo::UserAgent->new;
+  $ua->transactor->name("$IRSSI{name} irssi/$VERSION");
+  $ua->connect_timeout(3);
+  $ua->proxy->detect;
+
   my @servers = Irssi::servers();
 
   foreach my $server (@servers) {
@@ -73,31 +94,37 @@ sub init {
   }
 }
 
-sub api_call {
-  my ($tag, $method, $url) = @_;
+sub finish_delay {
+  my $id = shift;
+  my $delay = delete $DELAYS{$id};
+  $DELAY_ID = 0 unless %DELAYS;
+  $delay
+}
 
-  my $resp;
-  my $payload;
-  my $ua = LWP::UserAgent->new;
-  $ua->agent("$IRSSI{name} irssi/$VERSION");
-  $ua->timeout(3);
-  $ua->env_proxy;
+sub api_call {
+  my ($tag, $method, $url, $continue) = @_;
 
   my $token = get_token($tag);
   return unless $token;
-  $url->query_form($url->query_form, 'token' => $token);
 
-  $resp = $ua->$method($url);
-  $payload = from_json($resp->decoded_content);
-  if ($resp->is_success) {
-    if (! $payload->{ok}) {
-      Irssi::print("The Slack API returned the following error: $payload->{error}", MSGLEVEL_CLIENTERROR) unless $payload->{error} eq 'channel_not_found';
-    }
-    return $payload;
-  }
-  else {
-    Irssi::print("Error calling the slack api: $resp->{code} $resp->{message}", MSGLEVEL_CLIENTERROR);
-  }
+  my $resp;
+  my $payload;
+
+  $url->query(['token' => $token]);
+  $ua->$method(
+    $url => sub {
+      my ($ua, $tx) = @_;
+      if ($tx->success) {
+	$payload = $tx->res->json;
+	if (! $payload->{ok}) {
+	  Irssi::print("The Slack API returned the following error: $payload->{error}", MSGLEVEL_CLIENTERROR) unless $payload->{error} eq 'channel_not_found';
+	}
+	$continue->($payload) if $continue;
+      }
+      else {
+	Irssi::print("Error calling the slack api: ".$tx->error->{code}." ".$tx->error->{message}, MSGLEVEL_CLIENTERROR);
+      }
+    });
 }
 
 sub sig_server_conn {
@@ -138,23 +165,42 @@ sub get_all_users {
   }
 }
 
+my %get_users_in_progress;
+
 sub get_users {
-  my ($tag) = @_;
+  my ($tag, $continue) = @_;
   return unless get_token($tag);
 
-  if (($LAST_USERS_UPDATE{$tag} + 4 * 60 * 60) < time()) {
-    my $url = URI->new($baseurl . 'users.list');
-
-    my $resp = api_call($tag, 'get', $url);
-
-    if ($resp->{ok}) {
-      my $slack_users = $resp->{members};
-      foreach my $u (@{$slack_users}) {
-        $USERS{$tag}{$u->{id}} = $u->{name};
-      }
-      $LAST_USERS_UPDATE{$tag} = time();
-    }
+  if ($get_users_in_progress{$tag}) {
+    push @{ $get_users_in_progress{$tag} }, $continue
+	if $continue;
+    return 1;
   }
+
+  if ((($LAST_USERS_UPDATE{$tag}//0) + 4 * 60 * 60) < time()) {
+    $get_users_in_progress{$tag} = $continue ? [ $continue  ] : [ ];
+    my $url = Mojo::URL->new($baseurl . 'users.list');
+    api_call(
+      $tag, 'get', $url,
+      sub {
+	my ($resp) = @_;
+	if ($resp->{ok}) {
+	  my $slack_users = $resp->{members};
+	  foreach my $u (@{$slack_users}) {
+	    $USERS{$tag}{$u->{id}} = $u->{name};
+	  }
+	  $LAST_USERS_UPDATE{$tag} = time();
+	}
+	my $arr = delete $get_users_in_progress{$tag};
+	while (my $cb = pop @$arr) {
+	  $cb->();
+	}
+      });
+    return 1;
+  }
+
+  $continue->();
+  return 1;
 }
 
 my %CHANNELS;
@@ -167,81 +213,155 @@ sub chan_joined {
     $LAST_CHANNELS_UPDATE{ $tag } = 0;
   }
 }
+my %get_channels_in_progress;
 sub get_chanid {
-  my ($tag, $channame, $force) = @_;
-
-  if ($force || (($LAST_CHANNELS_UPDATE{$tag} + 4 * 60 * 60) < time())) {
-    for my $resource (qw(channels groups)) {
-      my $url = URI->new($baseurl . $resource . '.list');
-      $url->query_form('exclude_archived' => 1);
-
-      my $resp = api_call($tag, 'get', $url);
-
-      if ($resp->{ok}) {
-	foreach my $c (@{$resp->{$resource}}) {
-	  $CHANNELS{$tag}{$c->{name}} = $c->{id};
-	  $CHANNEL_TYPE{$tag}{$c->{name}} = $resource;
-	}
-	$LAST_CHANNELS_UPDATE{$tag} = time();
-      }
-    }
+  my ($tag, $channame, $continue, $force) = @_;
+  if ($get_channels_in_progress{$tag}) {
+    push @{ $get_channels_in_progress{$tag} }, [ $tag, $channame, $continue ]
+	if $continue;
+    return 1;
   }
 
-  return $CHANNELS{$tag}{$channame};
+  if ($force || ((($LAST_CHANNELS_UPDATE{$tag}//0) + 4 * 60 * 60) < time())) {
+    $get_channels_in_progress{$tag} = [];
+    push @{ $get_channels_in_progress{$tag} }, [ $tag, $channame, $continue ]
+	if $continue;
+
+    my $id = $DELAY_ID++;
+    my $delay = $DELAYS{$id} = Mojo::IOLoop->delay(
+      sub {
+	$LAST_CHANNELS_UPDATE{$tag} = time();
+	my $arr = delete $get_channels_in_progress{$tag};
+	while (my $data = pop @$arr) {
+	  my ($tag, $channame, $cb) = @$data;
+	  $cb->($CHANNELS{$tag}{$channame});
+	}
+	finish_delay($id);
+      });
+
+    for my $resource (qw(channels groups)) {
+      my $end = $delay->begin;
+      my $url = Mojo::URL->new($baseurl . $resource . '.list');
+      $url->query(exclude_archived => 1);
+
+      api_call(
+	$tag, 'get', $url, sub {
+	  my ($resp) = @_;
+	  if ($resp->{ok}) {
+	    foreach my $c (@{$resp->{$resource}}) {
+	      $CHANNELS{$tag}{$c->{name}} = $c->{id};
+	      $CHANNEL_TYPE{$tag}{$c->{name}} = $resource;
+	    }
+	  }
+	  $end->();
+	});
+    }
+    return 1;
+  }
+
+  $continue->($CHANNELS{$tag}{$channame});
+  return 1;
 }
 
 sub get_query_log {
   &Irssi::signal_continue;
   my ($query) = @_;
   my $tag = $query->{server}{tag};
+  my $name = $query->{name};
   if ($servertag{ $tag }) {
-    get_users($tag);
-    my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
-    my $url = URI->new($baseurl . 'im.list');
-    my $resp = api_call($tag, 'get', $url);
-    return unless $resp->{ok};
-    for my $im (@{$resp->{ims}}) {
-      if (lc $USERS{$tag}{$im->{user}} eq lc $query->{name}) {
-	my $url = URI->new($baseurl . 'im.history');
-	$url->query_form('channel' => $im->{id},
-			 'count' => $count);
-	my $resp = api_call($tag, 'get', $url);
-	if ($resp->{ok}) {
-	  print_history($resp, $query);
-	}
-      }
-    }
+    get_users(
+      $tag, sub {
+	my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
+	my $url = Mojo::URL->new($baseurl . 'im.list');
+	api_call(
+	  $tag, 'get', $url, sub {
+	    my ($resp) = @_;
+	    return unless $resp->{ok};
+	    for my $im (@{$resp->{ims}}) {
+	      if (lc $USERS{$tag}{$im->{user}} eq lc $name) {
+		my $url = Mojo::URL->new($baseurl . 'im.history');
+		$url->query(channel => $im->{id},
+			    count => $count);
+		api_call(
+		  $tag, 'get', $url, sub {
+		    my ($resp) = @_;
+		    if ($resp->{ok}) {
+		      my $server = Irssi::server_find_tag($tag) || return;
+		      my $query = $server->query_find($name) || return;
+		      print_history($resp, $query);
+		    }
+		  });
+	      }
+	    }
+	  });
+      });
   }
 }
 
 sub get_chanlog {
   my ($channel) = @_;
   my $tag = $channel->{server}{tag};
+  my $name = $channel->{name};
   if ($servertag{ $tag }) {
+    get_users(
+      $tag, sub {
+	my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
+	$channel->{name} =~ s/^#//;
+	get_chanid(
+	  $tag, $channel->{name}, sub {
+	    my ($chan_id) = @_;
+	    my $url = Mojo::URL->new($baseurl . 'channels.history');
+	    $url->query(channel => $chan_id,
+			count => $count);
 
-    get_users($tag);
-
-    my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
-    $channel->{name} =~ s/^#//;
-    my $url = URI->new($baseurl . 'channels.history');
-    $url->query_form('channel' => get_chanid($tag, $channel->{name}),
-		     'count' => $count);
-
-    my $resp = api_call($tag, 'get', $url);
-
-    if (!$resp->{ok}) {
-      # First try failed, so maybe this chan is actually a private group
-      #Irssi::print($channel->{name}. " appears to be a private group");
-      $url = URI->new($baseurl . 'groups.history');
-      my $groupid = get_chanid($tag, $channel->{name});
-      $url->query_form('channel' => $groupid,
-                       'count' => $count);
-      $resp = api_call($tag, 'get', $url);
-    }
-
-    if ($resp->{ok}) {
-      print_history($resp, $channel);
-    }
+	    my $id = $DELAY_ID++;
+	    $DELAYS{$id} = Mojo::IOLoop->delay(
+	      sub {
+		my $delay = shift;
+		my $end = $delay->begin;
+		api_call(
+		  $tag, 'get', $url, sub {
+		    my ($resp) = @_;
+		    $end->(undef, $resp);
+		  });
+		return;
+	      },
+	      sub {
+		my $delay = shift;
+		my ($r1) = @_;
+		if ($r1->{ok}) {
+		  $delay->pass($r1);
+		  return;
+		}
+		my $end = $delay->begin;
+		# First try failed, so maybe this chan is actually a private group
+		#Irssi::print($channel->{name}. " appears to be a private group");
+		my $url = Mojo::URL->new($baseurl . 'groups.history');
+		get_chanid(
+		  $tag, $channel->{name}, sub {
+		    my ($groupid) = @_;
+		    $url->query(channel => $groupid,
+				count => $count);
+		    api_call(
+		      $tag, 'get', $url, sub {
+			my ($res) = @_;
+			$end->(undef, $res);
+		      });
+		  });
+		return;
+	      },
+	      sub {
+		my ($delay, $resp) = @_;
+		if ($resp->{ok}) {
+		  my $server = Irssi::server_find_tag($tag) || return;
+		  my $channel = $server->channel_find($name) || return;
+		  print_history($resp, $channel);
+		}
+		finish_delay($id);
+	      }
+	     );
+	  });
+      });
   }
 }
 
@@ -251,7 +371,7 @@ sub print_history {
   my $msgs = $resp->{messages};
   foreach my $m (reverse(@{$msgs})) {
     if ($m->{type} eq 'message') {
-      if ($m->{subtype} eq 'message_changed') {
+      if (exists $m->{subtype} && $m->{subtype} eq 'message_changed') {
 	$m->{text} = $m->{message}->{text};
 	$m->{user} = $m->{message}->{user};
       }
@@ -285,12 +405,16 @@ sub update_slack_mark {
   # Only update the Slack mark if the most recent visible line is newer.
   my($channel) = $window->{active}->{name} =~ /^#(.*)/;
   if ($LAST_MARK_UPDATED{$tag}{$channel} < $line->{info}->{time}) {
-    my $url = URI->new($baseurl . $CHANNEL_TYPE{$tag}{$channel} . '.mark');
-    $url->query_form('channel' => get_chanid($tag, $channel),
-		     'ts' => $line->{info}->{time});
+    my $url = Mojo::URL->new($baseurl . $CHANNEL_TYPE{$tag}{$channel} . '.mark');
+    get_chanid(
+      $tag, $channel, sub {
+	my ($chanid) = @_;
+	$url->query(channel => $chanid,
+		    ts => $line->{info}->{time});
 
-    api_call($tag, 'get', $url);
-    $LAST_MARK_UPDATED{$tag}{$channel} = $line->{info}->{time};
+	api_call($tag, 'get', $url);
+	$LAST_MARK_UPDATED{$tag}{$channel} = $line->{info}->{time};
+      });
   }
 }
 
@@ -305,7 +429,8 @@ sub sig_message_public {
   my ($server, $msg, $nick, $address, $target) = @_;
 
   my $window = Irssi::active_win();
-  if ($window->{active}->{type} eq 'CHANNEL' &&
+  if ($window->{active} &&
+      $window->{active}->{type} eq 'CHANNEL' &&
       $window->{active}->{name} eq $target &&
       $window->{bottom}) {
     if (Irssi::settings_get_bool($IRSSI{'name'} . '_automark')) {

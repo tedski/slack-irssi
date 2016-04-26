@@ -12,7 +12,7 @@ On connect to the server, expect the number of lines set in `slack_loglines` to 
 There are 2 settings available:
 
 `/set slack_token <string>`
- * The api token from [https://api.slack.com/]
+ * The api token from [https://api.slack.com/docs/oauth-test-tokens]
 
 `/set slack_loglines <integer>`
  * the number of lines to grab from channel history

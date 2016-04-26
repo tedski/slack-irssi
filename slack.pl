@@ -24,8 +24,8 @@
 #
 # there are 2 settings available:
 #
-# /set slack_token <string>
-#  - The api token from https://api.slack.com/
+# /set slack_token team1:token1 team2:token2
+#  - The api token from https://api.slack.com/docs/oauth-test-tokens
 #
 # /set slack_loglines <integer>
 #  - the number of lines to grab from channel history
@@ -38,37 +38,43 @@ use Irssi::TextUI;
 use JSON;
 use URI;
 use LWP::UserAgent;
-use Mozilla::CA;
+use HTML::Entities;
+BEGIN {
+  local $@;
+  eval { require Mozilla::CA; };
+  if ($@) {
+    warn $@;
+  }
+}
 use POSIX qw(strftime);
-use vars qw($VERSION %IRSSI $token $servertag $forked);
 
 our $VERSION = "0.1.1";
 our %IRSSI = (
-    authors => "Ted \'tedski\' Strzalkowski",
-    contact => "contact\@tedski.net",
-    name  => "slack",
-    description => "Add functionality when connected to the Slack IRC Gateway.",
-    license => "GPL",
-    url   => "https://github.com/tedski/slack-irssi/",
-    changed => "Wed, 13 Aug 2014 03:12:04 +0000"
-);
+  authors     => "Ted \'tedski\' Strzalkowski",
+  contact     => "contact\@tedski.net",
+  name	      => "slack",
+  description => "Add functionality when connected to the Slack IRC Gateway.",
+  license     => "GPL",
+  url	      => "https://github.com/tedski/slack-irssi/",
+ );
 
 my $baseurl = "https://slack.com/api/";
-my $svrre = qr/^\w+\.irc\.slack\.com/;
+my $svrre = qr/\.irc\.slack\.com/;
 my $lastupdate = 0;
+my %servertag;
 
 sub init {
   my @servers = Irssi::servers();
 
   foreach my $server (@servers) {
-    if ($server->{address} =~ /$svrre/) {
-      $servertag = $server->{tag};
+    if ($server->{address} =~ /^(.*?)$svrre/) {
+      $servertag{ $server->{tag} } = $1;
     }
   }
 }
 
 sub api_call {
-  my ($method, $url) = @_;
+  my ($tag, $method, $url) = @_;
 
   my $resp;
   my $payload;
@@ -77,18 +83,19 @@ sub api_call {
   $ua->timeout(3);
   $ua->env_proxy;
 
-  $token = Irssi::settings_get_str($IRSSI{'name'} . '_token');
+  my $token = get_token($tag);
+  return unless $token;
   $url->query_form($url->query_form, 'token' => $token);
 
   $resp = $ua->$method($url);
   $payload = from_json($resp->decoded_content);
   if ($resp->is_success) {
     if (! $payload->{ok}) {
-      Irssi::print("The Slack API returned the following error: $payload->{error}", MSGLEVEL_CLIENTERROR);
-    } else {
-    return $payload;
+      Irssi::print("The Slack API returned the following error: $payload->{error}", MSGLEVEL_CLIENTERROR) unless $payload->{error} eq 'channel_not_found';
     }
-  } else {
+    return $payload;
+  }
+  else {
     Irssi::print("Error calling the slack api: $resp->{code} $resp->{message}", MSGLEVEL_CLIENTERROR);
   }
 }
@@ -96,117 +103,164 @@ sub api_call {
 sub sig_server_conn {
   my ($server) = @_;
 
-  if ($server->{address} =~ /$svrre/) {
-    $servertag = $server->{tag};
+  if ($server->{address} =~ /^(.*?)$svrre/) {
+    $servertag{ $server->{tag} } = $1;
 
-    Irssi::signal_add('channel joined', 'get_chanlog');
-
-    get_users();
+    get_users( $server->{tag} );
   }
 }
 
 sub sig_server_disc {
   my ($server) = @_;
 
-  if ($server->{tag} eq $servertag) {
+  if ($servertag{ $server->{tag} }) {
     Irssi::signal_remove('channel joined', 'get_chanlog');
   }
 }
 
 my %USERS;
-my $LAST_USERS_UPDATE;
-sub get_users {
-  return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
+my %LAST_USERS_UPDATE;
 
-  if (($LAST_USERS_UPDATE + 4 * 60 * 60) < time()) {
+sub get_token {
+  my ($tag) = @_;
+  my $str = Irssi::settings_get_str($IRSSI{'name'} . '_token');
+  if ($str =~ /:/) {
+    my %map = split /:|\s+/, $str;
+    $map{ $servertag{ $tag } }
+  } else {
+    $str
+  }
+}
+
+sub get_all_users {
+  for my $tag (keys %servertag) {
+    get_users($tag) if $servertag{ $tag };
+  }
+}
+
+sub get_users {
+  my ($tag) = @_;
+  return unless get_token($tag);
+
+  if (($LAST_USERS_UPDATE{$tag} + 4 * 60 * 60) < time()) {
     my $url = URI->new($baseurl . 'users.list');
 
-    my $resp = api_call('get', $url);
+    my $resp = api_call($tag, 'get', $url);
 
     if ($resp->{ok}) {
       my $slack_users = $resp->{members};
       foreach my $u (@{$slack_users}) {
-        $USERS{$u->{id}} = $u->{name};
+        $USERS{$tag}{$u->{id}} = $u->{name};
       }
-      $LAST_USERS_UPDATE = time();
+      $LAST_USERS_UPDATE{$tag} = time();
     }
   }
 }
 
 my %CHANNELS;
-my $LAST_CHANNELS_UPDATE;
+my %CHANNEL_TYPE;
+my %LAST_CHANNELS_UPDATE;
 sub chan_joined {
   my ($channel) = @_;
-
-  if ($channel->{server}->{tag} eq $servertag) {
-    $LAST_CHANNELS_UPDATE = 0;
+  my $tag = $channel->{server}{tag};
+  if ($servertag{ $tag }) {
+    $LAST_CHANNELS_UPDATE{ $tag } = 0;
   }
 }
 sub get_chanid {
-  my ($channame, $is_private, $force) = @_;
+  my ($tag, $channame, $force) = @_;
 
-  my $ressource = "channels";
-  if ($is_private) {
-    $ressource = "groups";
-  }
+  if ($force || (($LAST_CHANNELS_UPDATE{$tag} + 4 * 60 * 60) < time())) {
+    for my $resource (qw(channels groups)) {
+      my $url = URI->new($baseurl . $resource . '.list');
+      $url->query_form('exclude_archived' => 1);
 
-  if ($force || (($LAST_CHANNELS_UPDATE + 4 * 60 * 60) < time())) {
-    my $url = URI->new($baseurl . $ressource . '.list');
-    $url->query_form('exclude_archived' => 1);
+      my $resp = api_call($tag, 'get', $url);
 
-    my $resp = api_call('get', $url);
-
-    if ($resp->{ok}) {
-      foreach my $c (@{$resp->{$ressource}}) {
-        $CHANNELS{$c->{name}} = $c->{id};
+      if ($resp->{ok}) {
+	foreach my $c (@{$resp->{$resource}}) {
+	  $CHANNELS{$tag}{$c->{name}} = $c->{id};
+	  $CHANNEL_TYPE{$tag}{$c->{name}} = $resource;
+	}
+	$LAST_CHANNELS_UPDATE{$tag} = time();
       }
-      $LAST_CHANNELS_UPDATE = time();
     }
   }
 
-  return $CHANNELS{$channame};
-}    
+  return $CHANNELS{$tag}{$channame};
+}
+
+sub get_query_log {
+  &Irssi::signal_continue;
+  my ($query) = @_;
+  my $tag = $query->{server}{tag};
+  if ($servertag{ $tag }) {
+    get_users($tag);
+    my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
+    my $url = URI->new($baseurl . 'im.list');
+    my $resp = api_call($tag, 'get', $url);
+    return unless $resp->{ok};
+    for my $im (@{$resp->{ims}}) {
+      if (lc $USERS{$tag}{$im->{user}} eq lc $query->{name}) {
+	my $url = URI->new($baseurl . 'im.history');
+	$url->query_form('channel' => $im->{id},
+			 'count' => $count);
+	my $resp = api_call($tag, 'get', $url);
+	if ($resp->{ok}) {
+	  print_history($resp, $query);
+	}
+      }
+    }
+  }
+}
 
 sub get_chanlog {
   my ($channel) = @_;
+  my $tag = $channel->{server}{tag};
+  if ($servertag{ $tag }) {
 
-  if ($channel->{server}->{tag} eq $servertag) {
-
-    get_users();
+    get_users($tag);
 
     my $count = Irssi::settings_get_int($IRSSI{'name'} . '_loglines');
     $channel->{name} =~ s/^#//;
     my $url = URI->new($baseurl . 'channels.history');
-    $url->query_form('channel' => get_chanid($channel->{name}, 0, 0),
-      'count' => $count);
+    $url->query_form('channel' => get_chanid($tag, $channel->{name}),
+		     'count' => $count);
 
-    my $resp = api_call('get', $url);
+    my $resp = api_call($tag, 'get', $url);
 
     if (!$resp->{ok}) {
       # First try failed, so maybe this chan is actually a private group
-      Irssi::print($channel->{name}. " appears to be a private group");
+      #Irssi::print($channel->{name}. " appears to be a private group");
       $url = URI->new($baseurl . 'groups.history');
-      my $groupid = get_chanid($channel->{name}, 1, 1);
+      my $groupid = get_chanid($tag, $channel->{name});
       $url->query_form('channel' => $groupid,
                        'count' => $count);
-      $resp = api_call('get', $url);
+      $resp = api_call($tag, 'get', $url);
     }
 
     if ($resp->{ok}) {
-      my $msgs = $resp->{messages};
-      foreach my $m (reverse(@{$msgs})) {
-        if ($m->{type} eq 'message') {
-          if ($m->{subtype} eq 'message_changed') {
-            $m->{text} = $m->{message}->{text};
-            $m->{user} = $m->{message}->{user};
-          }
-          elsif ($m->{subtype}) {
-            next;
-          }
-          my $ts = strftime('%H:%M', localtime $m->{ts});
-          $channel->printformat(MSGLEVEL_PUBLIC, "slackmsg", $USERS{$m->{user}}, $m->{text}, "+", $ts);
-        }
+      print_history($resp, $channel);
+    }
+  }
+}
+
+sub print_history {
+  my ($resp, $channel) = @_;
+  my $tag = $channel->{server}{tag};
+  my $msgs = $resp->{messages};
+  foreach my $m (reverse(@{$msgs})) {
+    if ($m->{type} eq 'message') {
+      if ($m->{subtype} eq 'message_changed') {
+	$m->{text} = $m->{message}->{text};
+	$m->{user} = $m->{message}->{user};
       }
+      elsif ($m->{subtype}) {
+	next;
+      }
+      $m->{text} =~ s{([<][@](U\w+)[>])}{\@@{[ $USERS{$tag}{$2} // $1]}}g;
+      my $ts = strftime('%H:%M', localtime $m->{ts});
+      $channel->printformat(MSGLEVEL_PUBLIC | MSGLEVEL_NO_ACT, "slackmsg", $USERS{$tag}{$m->{user}}, decode_entities($m->{text}), "+", $ts);
     }
   }
 }
@@ -214,9 +268,9 @@ sub get_chanlog {
 my %LAST_MARK_UPDATED;
 sub update_slack_mark {
   my ($window) = @_;
-
+  my $tag = $window->{active_server}{tag};
   return unless ($window->{active}->{type} eq 'CHANNEL' &&
-                 $window->{active_server}->{tag} eq $servertag);
+		 $servertag{ $tag });
   return unless Irssi::settings_get_str($IRSSI{'name'} . '_token');
 
   # Leave $line set to the final visible line, not the one after.
@@ -230,19 +284,21 @@ sub update_slack_mark {
 
   # Only update the Slack mark if the most recent visible line is newer.
   my($channel) = $window->{active}->{name} =~ /^#(.*)/;
-  if ($LAST_MARK_UPDATED{$channel} < $line->{info}->{time}) {
-    my $url = URI->new($baseurl . 'channels.mark');
-    $url->query_form('channel' => get_chanid($channel),
-      'ts' => $line->{info}->{time});
+  if ($LAST_MARK_UPDATED{$tag}{$channel} < $line->{info}->{time}) {
+    my $url = URI->new($baseurl . $CHANNEL_TYPE{$tag}{$channel} . '.mark');
+    $url->query_form('channel' => get_chanid($tag, $channel),
+		     'ts' => $line->{info}->{time});
 
-    api_call('get', $url);
-    $LAST_MARK_UPDATED{$channel} = $line->{info}->{time};
+    api_call($tag, 'get', $url);
+    $LAST_MARK_UPDATED{$tag}{$channel} = $line->{info}->{time};
   }
 }
 
 sub sig_window_changed {
   my ($new_window) = @_;
-  update_slack_mark($new_window);
+  if (Irssi::settings_get_bool($IRSSI{'name'} . '_automark')) {
+    update_slack_mark($new_window);
+  }
 }
 
 sub sig_message_public {
@@ -252,7 +308,9 @@ sub sig_message_public {
   if ($window->{active}->{type} eq 'CHANNEL' &&
       $window->{active}->{name} eq $target &&
       $window->{bottom}) {
-    update_slack_mark($window);
+    if (Irssi::settings_get_bool($IRSSI{'name'} . '_automark')) {
+      update_slack_mark($window);
+    }
   }
 }
 
@@ -282,18 +340,22 @@ sub cmd_mark {
 init();
 
 # themes
-Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$1']);
+Irssi::theme_register(['slackmsg', '{timestamp $3} {pubmsgnick $2 {pubnick $0}}$1%[-t]']);
 
 # signals
 Irssi::signal_add('server connected', 'sig_server_conn');
 Irssi::signal_add('server disconnected', 'sig_server_disc');
-Irssi::signal_add('setup changed', 'get_users');
+Irssi::signal_add('setup changed', 'get_all_users');
 Irssi::signal_add('channel joined', 'chan_joined');
+Irssi::signal_add('channel joined', 'get_chanlog');
+Irssi::signal_add('query created', 'get_query_log');
 Irssi::signal_add('window changed', 'sig_window_changed');
 Irssi::signal_add('message public', 'sig_message_public');
 
-Irssi::command_bind('mark', 'cmd_mark');
+# renamed because it conflicts with trackbar's /mark
+Irssi::command_bind('slackmark', 'cmd_mark');
 
 # settings
 Irssi::settings_add_str('misc', $IRSSI{'name'} . '_token', '');
-Irssi::settings_add_int('misc', $IRSSI{'name'} . '_loglines', 20);
+Irssi::settings_add_int('misc', $IRSSI{'name'} . '_loglines', 200);
+Irssi::settings_add_bool('misc', $IRSSI{'name'} . '_automark', 1);
